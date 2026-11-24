@@ -1,0 +1,217 @@
+name: fraud-stream
+
+# Infrastructure, one-shot bootstrap/check jobs, and the four application services.
+# `make up` starts everything except the producer; `make demo` starts the producer.
+
+x-app: &app
+  image: fraud-stream/app:dev
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+  env_file: .env
+  environment:
+    KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+  read_only: true
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+
+services:
+  kafka:
+    image: apache/kafka:3.8.1
+    hostname: kafka
+    environment:
+      CLUSTER_ID: "fRaUdStReAm0000000001A"
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: "-Xms1g -Xmx1g"
+    ports:
+      - "127.0.0.1:29092:29092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 15s
+      retries: 12
+      start_period: 20s
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 1536M }
+
+  postgres:
+    image: postgres:16.6-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fraud}
+      POSTGRES_USER: ${POSTGRES_USER:-fraud}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2d
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/-/healthy"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512M }
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      prometheus: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3000/api/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 384M }
+
+  model-api:
+    <<: *app
+    command: ["python", "-m", "fraud_services.model_api.app"]
+    restart: unless-stopped
+    volumes:
+      - ./models:/app/models:ro
+    ports:
+      - "127.0.0.1:8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/readyz', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 1024M }
+
+  scorer:
+    <<: *app
+    command: ["python", "-m", "fraud_services.scorer.main"]
+    restart: unless-stopped
+    volumes:
+      - ./data/processed:/app/data:ro
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+      model-api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9101/metrics', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 180s  # loads ~1.3M history rows first (about 20-60 s)
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 1024M }
+
+  dashboard:
+    <<: *app
+    command: ["python", "-m", "fraud_services.dashboard.app"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+      db-init: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1024M }
+
+  # On demand: `make demo` (RATE=..., MAX=...)
+  producer:
+    <<: *app
+    profiles: [producer]
+    command: ["python", "-m", "fraud_services.producer.main"]
+    restart: "no"
+    volumes:
+      - ./data/processed:/app/data:ro
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+    deploy:
+      resources:
+        limits: { cpus: "1.5", memory: 2048M }
+
+  # One-shot: creates the four topics (idempotent), then exits 0.
+  kafka-init:
+    <<: *app
+    command: ["python", "-m", "fraud_common.admin", "ensure-topics"]
+    restart: "no"
+    depends_on:
+      kafka: { condition: service_healthy }
+
+  # One-shot: creates/updates the dashboard's least-privilege database login (idempotent).
+  db-init:
+    <<: *app
+    command: ["python", "-m", "fraud_common.admin", "ensure-db-role"]
+    restart: "no"
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  # One-shot: verifies topics + Postgres schema. `docker compose run --rm smoke`
+  smoke:
+    <<: *app
+    profiles: [smoke]
+    command: ["python", "-m", "fraud_common.admin", "check"]
+    restart: "no"
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+      postgres: { condition: service_healthy }
+
+volumes:
+  kafka-data:
+  postgres-data:
+  prometheus-data:
+  grafana-data:

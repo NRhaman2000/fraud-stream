@@ -1,0 +1,10 @@
+model            fraud_xgb-b62cf9ef6767
+threshold        0.6009  (max recall with val precision >= 0.95)
+best iteration   998
+
+split       rows  fraud  precision   recall     f1  PR-AUC  ROC-AUC     TP     FP     FN
+train  1,102,173  6,373      0.980    1.000  0.990   1.000    1.000  6,373    133      0
+val      194,502  1,133      0.950    0.961  0.956   0.987    1.000  1,089     57     44
+test     555,719  2,145      0.940    0.931  0.935   0.976    0.999  1,997    128    148
+
+test precision 0.940 (95% CI 0.929-0.950), recall 0.931 (95% CI 0.920-0.942)

@@ -1,0 +1,23 @@
+[project]
+name = "fraud-common"
+version = "0.1.0"
+description = "Shared settings, logging and Kafka/Postgres admin helpers for fraud-stream services."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pydantic>=2.10,<3",
+    "pydantic-settings>=2.7,<3",
+    "confluent-kafka>=2.6,<3",
+    "psycopg[binary]>=3.2,<4",
+    "orjson>=3.10,<4",
+    "numpy>=2.0,<3",
+    # Same `xgboost` module either way; the -cpu build skips ~300 MB of CUDA libraries on Linux.
+    "xgboost-cpu>=3.0,<4; sys_platform == 'linux'",
+    "xgboost>=3.0,<4; sys_platform != 'linux'",
+]
+
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fraud_common"]

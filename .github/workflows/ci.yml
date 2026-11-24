@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, types, unit tests, audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+      - name: Lint
+        run: make lint
+      - name: Type check (mypy --strict)
+        run: make typecheck
+      - name: Unit tests (coverage gate 85%)
+        run: make test
+      - name: Dependency audit
+        run: make audit
+
+  stack:
+    name: Full stack + end-to-end tests (synthetic data)
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+      - name: Secrets and synthetic dataset
+        # The real Kaggle data is not redistributable; a synthetic dataset with the same
+        # layout exercises the same code paths.
+        run: |
+          uv run python scripts/ci_setup.py env
+          uv run python scripts/ci_setup.py data "$RUNNER_TEMP/archive.zip"
+          make data SRC="$RUNNER_TEMP/archive.zip"
+          make train
+      - name: Start the stack
+        run: make up
+      - name: Integration and end-to-end tests
+        run: make test-integration
+      - name: Stream traffic through the whole pipeline
+        run: |
+          make demo RATE=500 MAX=5000
+          sleep 5
+          curl -fsS localhost:8000/api/stats | tee stats.json
+          python3 -c "import json,sys; d=json.load(open('stats.json')); sys.exit(0 if d['scored_total'] >= 5000 else 1)"
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail 200
+      - name: Stop
+        if: always()
+        run: docker compose --profile producer --profile smoke down --volumes

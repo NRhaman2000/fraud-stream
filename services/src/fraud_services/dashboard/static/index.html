@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>fraud-stream · live</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>fraud-stream <span class="muted">live card fraud scoring</span></h1>
+    <div id="conn" class="pill off">connecting…</div>
+  </header>
+
+  <section class="tiles" aria-label="Live stats">
+    <div class="tile"><div class="label">Throughput</div><div class="value" id="tps">–</div><div class="unit">tx / sec</div></div>
+    <div class="tile"><div class="label">Latency p95</div><div class="value" id="p95">–</div><div class="unit">ms, produce → scored</div></div>
+    <div class="tile"><div class="label">Scored</div><div class="value" id="scored">–</div><div class="unit"><span id="flagged">–</span> flagged</div></div>
+    <div class="tile"><div class="label">Live precision</div><div class="value" id="precision">–</div><div class="unit">recall <span id="recall">–</span> · <span id="labelled">–</span> labelled</div></div>
+  </section>
+
+  <section class="charts">
+    <figure><figcaption>Throughput (tx/sec), last 2 min</figcaption><canvas id="chart-tps" width="560" height="140"></canvas></figure>
+    <figure><figcaption>Latency p50 / p95 (ms), last 2 min</figcaption><canvas id="chart-lat" width="560" height="140"></canvas></figure>
+  </section>
+
+  <section>
+    <div class="bar">
+      <h2>Alert queue</h2>
+      <label>Show
+        <select id="filter">
+          <option value="open">Open</option>
+          <option value="">All</option>
+          <option value="confirmed_fraud">Confirmed fraud</option>
+          <option value="false_positive">False positive</option>
+        </select>
+      </label>
+    </div>
+    <table>
+      <thead><tr><th>Flagged</th><th>Card</th><th>Merchant</th><th>Category</th><th class="num">Amount</th><th class="num">Score</th><th>Truth</th><th>Review</th></tr></thead>
+      <tbody id="alerts"></tbody>
+    </table>
+    <button id="more" type="button" hidden>Load more</button>
+    <p id="msg" class="muted" role="status"></p>
+  </section>
+  <footer class="muted">Model <span id="model">–</span> · stats over the last <span id="window">–</span> s</footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>

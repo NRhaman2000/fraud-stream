@@ -1,0 +1,24 @@
+[project]
+name = "fraud-training"
+version = "0.1.0"
+description = "Offline pipeline: ingest the Kaggle Sparkov dataset, build features, train and evaluate the fraud model."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fraud-common",
+    "pandas>=2.2,<3",
+    "pyarrow>=18",
+    "scikit-learn>=1.5,<2",
+]
+
+[tool.uv.sources]
+fraud-common = { workspace = true }
+
+[project.scripts]
+fraud-training = "fraud_training.cli:main"
+
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fraud_training"]
